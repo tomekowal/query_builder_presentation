@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Title</title>
+    <meta charset="utf-8">
+    <style>
+      table {
+        border-collapse: collapse;
+      }
+      th, td {
+        padding: 5px;
+        border: 1px solid black;
+      }
+      @import url(https://fonts.googleapis.com/css?family=Yanone+Kaffeesatz);
+      @import url(https://fonts.googleapis.com/css?family=Droid+Serif:400,700,400italic);
+      @import url(https://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700,400italic);
+
+      body { font-family: 'Droid Serif'; }
+      h1, h2, h3 {
+        font-family: 'Yanone Kaffeesatz';
+        font-weight: normal;
+      }
+      .remark-code, .remark-inline-code { font-family: 'Ubuntu Mono'; }
+      .image-50 img { width: 50%; }
+    </style>
+  </head>
+  <body>
+    <textarea id="source">
+
+class: center, middle
+
+# Desigining an Elixir library using token-based approach
+
+.image-50[![Company Logo](images/elixir-logo.png)]
+.image-50[![Company Logo](images/company-logo.png)]
+
+---
+
+# Agenda
+
+- Token-based approach examples
+
+--
+count: false
+
+- Defining a problem to solve
+
+--
+count: false
+
+- Alternatives to token-based approach
+
+--
+count: false
+
+- "Laziness" in a language with strict evaluation
+
+--
+count: false
+
+- The balance between laziness and ability to debug
+
+--
+count: false
+
+- The balance between composability and strict evaluation
+
+--
+count: false
+
+- Striving for symmetry and ease of use
+
+---
+
+# Token-based approach
+
+- A function that initiates data structure
+- Set of functions manipulating data structure (natural to pipe)
+- A way to finish the computation
+
+---
+
+# Changeset example
+
+```elixir
+original_data
+|> Changeset.cast(requested_changes, all_fields)
+|> Changeset.validate_required(required_fields)
+|> Repo.update()
+```
+
+---
+
+# Multi example
+
+```elixir
+Multi.new()
+|> Multi.insert(:tag, changeset)
+|> Repo.transaction()
+```
+
+---
+
+# What do we want to solve with Query Builder?
+
+- every time we build a search form, there is a ton of search criteria
+- each search criteria filters something in the query
+- we need to validate most params before passing them on
+- we need to provide defaults for some of them
+- we need to sort and paginate
+
+```elixir
+%User{
+  email: "user@email.com",
+  name: "User",
+  birthdate: ~D[2000-01-01]
+}
+```
+
+---
+
+# Alternative approach 1: "by hand"
+
+```elixir
+def build(query, "search", term) do
+  query
+  |> where([u], ilike(u.email, ^term) or ilike(u.name, ^term)
+end
+
+def build(query, "adult", "true") do
+  query
+  |> where([u], fragment("date_part('years', age(now(), ?)) > 18", u.birthdate))
+end
+def build(query, "adult", "false") do
+  query
+end
+
+params
+|> Enum.reduce(User, fn {param, value}, query ->
+  build(query, param, value)
+end)
+```
+
+---
+
+# Alternative approach 2: "Rummage"
+
+- Uses behaviours to make sure passed functions have correct types
+- Requires a significant amount of boilerplate because each search functionality requires a separate module
+
+---
+
+# Alternative approach 3: "Ecto dynamic"
+
+```elixir
+def filter_where(params) do
+  Enum.reduce(params, dynamic(true), fn
+    {"search", term}, dynamic ->
+      dynamic([p], ^dynamic and ilike(u.email, ^term) or ilike(u.name, ^term))
+
+    {"adult", "true"}, dynamic ->
+      dynamic([p], ^dynamic and fragment("date_part('years', age(now(), ?)) > 18", u.birthdate)
+
+    {_, _}, dynamic ->
+      # Not a where parameter
+      dynamic
+  end)
+```
+
+---
+
+# Our approach
+
+```elixir
+defp filter_users_by_search(query, search) do
+  query
+  |> where([u], ilike(u.name, ^db_search) or ilike(u.email, ^db_search)
+end
+
+defp filter_users_by_adult(query, true) do
+  query
+  |> where([u], fragment("date_part('years', age(now(), ?)) > 18", u.birthdate))
+end
+
+defp filter_users_by_adult(query, false), do: query
+
+alias QueryBuilder, as: QB
+
+data =
+  QB.new(Repo, User, params, %{search: :string, adult: :boolean})
+  |> QB.put_filter_function(:search, &filter_users_by_search/2)
+  |> QB.put_filter_function(:adult, &filter_users_by_adult/2)
+  |> QB.put_default_filters(%{adult: true})
+  |> QB.fetch()
+```
+
+---
+
+# "Laziness" in a language with strict evaluation
+
+- We use `scrivener_ecto` for pagination
+- It requires using `Repo.paginate` to get a page of data
+- We want to base the decision if we use `all` or `paginate` on params
+- Let's compute everything in `fetch` function!
+
+---
+
+# Balance between laziness and ability to debug
+
+- We wanted to make debugging as easy as `IO.inspect`.
+- We want to validate params immediately to show potential errors
+- We want to calculate actual params immediately
+
+---
+
+# Balance between composability and strict evaluation
+
+- The more lazy, the more composable
+- The more strict, the more parameters we need "upfront" when creating `QB`
+- We are using strict evaluation for calculating params, so we need validation function upfront
+- We calculate the actual query later, so we can add filter functions as needed
+
+---
+
+# Possibility of "invalid" states
+
+- Functions for invalid params
+- Params that aren't handled by any functions
+
+---
+
+# Multiple builders for the same entity
+
+- can reuse part of filter functions which are bulk of the code
+- differ in accepted params
+- can be separate modules or part of controllers
+
+---
+
+# Minimal number of dependencies
+
+- `ecto`
+- `scrivener_ecto`
+- does not depend on `phoenix` (params are simple Elixir maps)
+
+---
+
+# Striving for symmetry and ease of use
+
+| | filter | order | paginate |
+|-|--------|-------|----------|
+| put_function | put_filter_function | put_order_function | N/A |
+| put_param | put_filter_param | put_order_param | put_pagination_param |
+| put_default | put_default_filter | put_default_order | put_default_pagination |
+
+---
+
+class: center, middle
+
+# Thank you
+
+Tomasz Kowal
+
+@snajper47
+
+    </textarea>
+    <script src="https://remarkjs.com/downloads/remark-latest.min.js">
+    </script>
+    <script>
+      var slideshow = remark.create({countIncrementalSlides: false});
+(function(d) {
+  var el = d.getElementsByClassName("remark-slides-area");
+  if (!el) return;
+  var slide, slides = slideshow.getSlides(), els = el[0].children;
+  for (var i = 1; i < slides.length; i++) {
+    slide = slides[i];
+    if (slide.properties.continued === "true" || slide.properties.count === "false") {
+      els[i - 1].className += ' has-continuation';
+    }
+  }
+  var s = d.createElement("style");
+  s.type = "text/css";
+  s.innerHTML = "@media print { .has-continuation { display: none; } }";
+  d.head.appendChild(s);
+})(document);
+    </script>
+  </body>
+</html>
+
