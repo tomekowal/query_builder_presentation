@@ -19,95 +19,122 @@
      h1, h2, h3 {
        font-family: proxima-soft,-apple-system,BlinkMacSystemFont,segoe ui,Roboto,Oxygen-Sans,Ubuntu,Cantarell,helvetica neue,sans-serif;
        font-weight: normal;
+       font-weight: 100;
      }
      .remark-code, .remark-inline-code { font-family: 'Ubuntu Mono'; }
+     .image-100 img { width: 100%; }
      .image-50 img { width: 50%; }
+     .image-25 img { width: 25%; }
+     .remark-code-line {
+       text-align: left;
+       font-family: monaco;
+     }
+     li {
+       text-align: left;
+     }
     </style>
   </head>
   <body>
     <textarea id="source">
 
-class: center, middle
+class: middle
 
-# Desigining an Elixir library using token-based approach
+# DESIGINING<br/>AN ELIXIR LIBRARY USING<br/>TOKEN-BASED APPROACH
 
-.image-50[![Company Logo](images/elixir-logo.png)]
-.image-50[![Company Logo](images/company-logo.png)]
-
----
-
-# Agenda
-
-- Token-based approach examples
-
---
-count: false
-
-- Defining a problem to solve
-
---
-count: false
-
-- Alternatives to token-based approach
-
---
-count: false
-
-- "Laziness" in a language with strict evaluation
-
---
-count: false
-
-- The balance between laziness and ability to debug
-
---
-count: false
-
-- The balance between composability and strict evaluation
-
---
-count: false
-
-- Striving for symmetry and ease of use
+.image-25[![Company Logo](images/company-logo.png)]
 
 ---
 
-# Token-based approach
+class: center
 
-- A function that initiates data structure
-- Set of functions manipulating data structure (natural to pipe)
-- A way to finish the computation
+# TOKEN-BASED APPROACH
+
+.image-50[![René Föhring](images/rene.png)]
 
 ---
 
-# Changeset example
+class: center
+
+# TOKEN-BASED APPROACH
+
+.image-100[![Token](images/token.png)]
+
+---
+
+class: center
+
+# TOKEN-BASED APPROACH
+
+.image-100[![Token](images/token.png)]
 
 ```elixir
 original_data
 |> Changeset.cast(requested_changes, all_fields)
 |> Changeset.validate_required(required_fields)
+|> Changeset.unique_constraint(:email)
 |> Repo.update()
 ```
 
 ---
 
-# Multi example
+class: center
+
+# TOKEN-BASED APPROACH
+
+.image-100[![Token](images/token.png)]
 
 ```elixir
-Multi.new()
-|> Multi.insert(:tag, changeset)
+Multi.new
+|> Multi.update(:account, Account.changeset(account, params))
+|> Multi.insert(:log, Log.changeset(account, params))
 |> Repo.transaction()
 ```
 
 ---
 
-# What do we want to solve with Query Builder?
+class: center
 
+# BENEFITS!
+
+.image-100[![Composability](images/composability.jpg)]
+
+---
+
+class: center
+
+# BENEFITS!
+
+.image-50[![Composability](images/lazy.gif)]
+
+---
+
+class: center
+
+# PROBLEM
+
+.image-100[![Simple Form](images/simple_form.png)]
+
+---
+
+class: center
+
+# PROBLEM
+
+.image-100[![Complex Form](images/complex_form.png)]
+
+???
 - every time we build a search form, there is a ton of search criteria
 - each search criteria filters something in the query
 - we need to validate most params before passing them on
 - we need to provide defaults for some of them
 - we need to sort and paginate
+- we split searches into multiple pages and reuse filters
+
+---
+
+class: center
+
+# EXAMPLE
 
 ```elixir
 %User{
@@ -119,71 +146,116 @@ Multi.new()
 
 ---
 
-# Alternative approach 1: "by hand"
+class: center
+
+# PIECES TO COMPOSE
 
 ```elixir
 def build(query, "search", term) do
   query
-  |> where([u], ilike(u.email, ^term) or ilike(u.name, ^term)
+  |> where([u], ilike(u.email, ^term) or ilike(u.name, ^term))
 end
+```
 
+---
+
+class: center
+
+# PIECES TO COMPOSE
+
+```elixir
 def build(query, "adult", "true") do
   query
-  |> where([u], fragment("date_part('years', age(now(), ?)) > 18", u.birthdate))
+  |> where([u],
+    fragment("date_part('years', age(now(), ?)) > 18", u.birthdate))
 end
 def build(query, "adult", "false") do
   query
 end
+```
 
-params
+---
+
+class: center
+
+# COMPOSITION
+
+```elixir
+%{"search" => "Tomasz", "adult" => "true"}
 |> Enum.reduce(User, fn {param, value}, query ->
   build(query, param, value)
 end)
 ```
 
----
+--
 
-# Alternative approach 2: "Rummage"
-
-- Uses behaviours to make sure passed functions have correct types
-- Requires a significant amount of boilerplate because each search functionality requires a separate module
-
----
-
-# Alternative approach 3: "Ecto dynamic"
-
-```elixir
-def filter_where(params) do
-  Enum.reduce(params, dynamic(true), fn
-    {"search", term}, dynamic ->
-      dynamic([p], ^dynamic and ilike(u.email, ^term) or ilike(u.name, ^term))
-
-    {"adult", "true"}, dynamic ->
-      dynamic([p], ^dynamic and fragment("date_part('years', age(now(), ?)) > 18", u.birthdate)
-
-    {_, _}, dynamic ->
-      # Not a where parameter
-      dynamic
-  end)
+```Elixir
+User
+|> build("search", "Tomasz")
+|> build("adult", "true")
 ```
 
 ---
 
-# Our approach
+class: center
+
+# PAGINATION
 
 ```elixir
-defp filter_users_by_search(query, search) do
-  query
-  |> where([u], ilike(u.name, ^db_search) or ilike(u.email, ^db_search)
+if params["page"] and params["page_size"] do
+  Repo.paginate(...)
+else
+  Repo.all(...)
 end
+```
 
+---
+
+class: center
+
+# WHAT DO WANT?
+
+.image-50[![Composability](images/composability.jpg)]
+.image-50[![Composability](images/lazy.gif)]
+
+---
+
+class: center
+
+# SOLUTION
+
+```elixir
+defp filter_users_by_search(query, term) do
+  query
+  |> where([u], ilike(u.name, ^term) or ilike(u.email, ^term))
+end
+```
+
+---
+
+class: center
+
+# SOLUTION
+
+```elixir
 defp filter_users_by_adult(query, true) do
   query
-  |> where([u], fragment("date_part('years', age(now(), ?)) > 18", u.birthdate))
+  |> where([u],
+    fragment("date_part('years', age(now(), ?)) > 18", u.birthdate))
 end
 
 defp filter_users_by_adult(query, false), do: query
+```
 
+---
+
+class: center
+
+# SOLUTION
+
+.image-100[![Token](images/token.png)]
+
+```elixir
 alias QueryBuilder, as: QB
 
 data =
@@ -196,94 +268,150 @@ data =
 
 ---
 
-# "Laziness" in a language with strict evaluation
+class: center
 
-- We use `scrivener_ecto` for pagination
-- It requires using `Repo.paginate` to get a page of data
-- We want to base the decision if we use `all` or `paginate` on params
-- Let's compute everything in `fetch` function!
+# EMULATING LAZINESS
 
----
-
-# Balance between laziness and ability to debug
-
-- We wanted to make debugging as easy as `IO.inspect`.
-- We want to validate params immediately to show potential errors
-- We want to calculate actual params immediately
+.image-100[![Token](images/token.png)]
 
 ---
 
-# Balance between composability and strict evaluation
+class: center
 
-- The more lazy, the more composable
-- The more strict, the more parameters we need "upfront" when creating `QB`
-- We are using strict evaluation for calculating params, so we need validation function upfront
-- We calculate the actual query later, so we can add filter functions as needed
+# EMULATING LAZINESS
 
----
-
-# Possibility of "invalid" states
-
-- Functions for invalid params
-- Params that aren't handled by any functions
+.image-100[![Token](images/lazy_token.png)]
 
 ---
 
-# Multiple builders for the same entity
+class: center
 
-- can reuse part of filter functions which are bulk of the code
-- differ in accepted params
-- can be separate modules or part of controllers
+# TOO LAZY
+
+```elixir
+alias QueryBuilder, as: QB
+
+data =
+  QB.new()
+  |> QB.put_repo(Repo)
+  |> QB.put_base_query(User)
+  |> QB.put_params(params)
+  |> QB.put_param_types(%{search: :string, adult: :boolean})
+  |> QB.put_filter_function(:search, &filter_users_by_search/2)
+  |> QB.put_filter_function(:adult, &filter_users_by_adult/2)
+  |> QB.put_default_filters(%{adult: true})
+  |> QB.fetch()
+```
 
 ---
 
-# Minimal number of dependencies
+class: center
 
-- `ecto`
-- `scrivener_ecto`
-- does not depend on `phoenix` (params are simple Elixir maps)
+# TOO LAZY
+
+```elixir
+...
+|> QB.put_params(%{"search" => "Tomasz"})
+|> QB.put_default_filters(%{adult: true})
+|> IO.inspect()
+```
 
 ---
 
-# Striving for symmetry and ease of use
+class: center
 
-| | filter | order | paginate |
-|-|--------|-------|----------|
-| put_function | put_filter_function | put_order_function | N/A |
-| put_param | put_filter_param | put_order_param | put_pagination_param |
-| put_default | put_default_filter | put_default_order | put_default_pagination |
+# TOO LAZY
+
+```elixir
+%QueryBuilder{
+  params: %{"search" => "Tomasz"}
+  default_filters: %{adult: true}
+}
+```
+
+---
+
+class: center
+
+# WHAT WE WANT
+
+```elixir
+%QueryBuilder{
+  filters: %{search: "Tomasz", adult: true}
+}
+```
+
+---
+
+class: center
+
+# WHAT WE WANT
+
+- we want "put_default_filters" to compute filters immediately
+--
+
+- so we need to have filters computed from params and validated before that
+--
+
+- so we need to have params and validation before that call
+--
+
+- let's put it in the initializing function
+
+---
+
+class: center
+
+# BALANCE
+
+.image-100[![Balance](images/balance.png)]
+
+---
+
+class: center
+
+# ANYTHING ELSE?
+
+- preventing invalid states
+--
+
+- making function easy to learn
+--
+
+- alternative approaches to the same problem
 
 ---
 
 class: center, middle
 
-# Thank you
+# THANK YOU
 
 Tomasz Kowal
 
 @snajper47
 
     </textarea>
-    <script src="https://remarkjs.com/downloads/remark-latest.min.js">
-    </script>
+    <script src="https://remarkjs.com/downloads/remark-latest.min.js"></script>
+    <script src="./mermaid.min.js"></script>
     <script>
-      var slideshow = remark.create({countIncrementalSlides: false});
-(function(d) {
-  var el = d.getElementsByClassName("remark-slides-area");
-  if (!el) return;
-  var slide, slides = slideshow.getSlides(), els = el[0].children;
-  for (var i = 1; i < slides.length; i++) {
-    slide = slides[i];
-    if (slide.properties.continued === "true" || slide.properties.count === "false") {
-      els[i - 1].className += ' has-continuation';
-    }
-  }
-  var s = d.createElement("style");
-  s.type = "text/css";
-  s.innerHTML = "@media print { .has-continuation { display: none; } }";
-  d.head.appendChild(s);
-})(document);
+     var slideshow = remark.create({countIncrementalSlides: false});
+     (function(d) {
+       var el = d.getElementsByClassName("remark-slides-area");
+       if (!el) return;
+       var slide, slides = slideshow.getSlides(), els = el[0].children;
+       for (var i = 1; i < slides.length; i++) {
+         slide = slides[i];
+         if (slide.properties.continued === "true" || slide.properties.count === "false") {
+           els[i - 1].className += ' has-continuation';
+         }
+       }
+       var s = d.createElement("style");
+       s.type = "text/css";
+       s.innerHTML = "@media print { .has-continuation { display: none; } }";
+       d.head.appendChild(s);
+     })(document);
     </script>
+    <script>mermaid.initialize({startOnLoad:true, theme: 'forest'});</script>
   </body>
 </html>
 
